@@ -78,12 +78,18 @@ namespace CUDAUtils {
             return ans;
         }
 
-        static cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t allocation_size, CUdevice device) {
+        static hipMemAllocationProp cu_mem_get_allocation_prop(CUdevice device) {
             hipMemAllocationProp prop = {};
             prop.type = hipMemAllocationTypePinned;
             prop.location.type = hipMemLocationTypeDevice;
             prop.location.id = device;
             prop.allocFlags.compressionType = 0x0;
+
+            return prop;
+        }
+
+        static cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t allocation_size, CUdevice device) {
+            const hipMemAllocationProp prop = cu_mem_get_allocation_prop(device);
 
             hipError_t ret = hipMemCreate(alloc_handle, allocation_size, &prop, 0);
             if (ret == hipErrorOutOfMemory) {
@@ -96,8 +102,15 @@ namespace CUDAUtils {
         }
 
         static size_t cu_mem_get_allocation_size(size_t raw_size, CUdevice device) {
-            (void)device;
-            return raw_size;
+            const hipMemAllocationProp prop = cu_mem_get_allocation_prop(device);
+            size_t granularity = 0;
+            CURESULT_CHECK(hipMemGetAllocationGranularity(
+                &granularity, &prop, hipMemAllocationGranularityMinimum));
+            SIMPLE_CHECK(granularity > 0, "hipMemGetAllocationGranularity returned zero");
+            SIMPLE_CHECK(
+                raw_size <= std::numeric_limits<size_t>::max() - (granularity - 1),
+                "allocation size overflow while applying HIP VMM granularity");
+            return ((raw_size + granularity - 1) / granularity) * granularity;
         }
 
         static void cu_mem_set_access(void *ptr, size_t allocation_size, CUdevice device) {
